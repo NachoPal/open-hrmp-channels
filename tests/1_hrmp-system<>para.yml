@@ -1,0 +1,110 @@
+---
+settings:
+  chains:
+    relay_chain: &relay_chain
+      wsPort: 9800
+    system_parachain:
+      wsPort: 9810
+      paraId: &system_id 1000
+    penpal_parachain:
+      wsPort: 9820
+      paraId: &para_id 2000
+  variables:
+    common:
+      deposit: &deposit 200000000000 # 10 DOTs (hrmpSenderDeposit) + 10 DOTS (hrmpRecipientDeposit)
+      hrmp_channels:
+        proposed_max_capacity: &max_capacity 8
+        proposed_max_message_size: &max_message_size 8192
+    chains:
+      relay_chain:
+        signer: &rc_signer //Alice
+        signer_account: &rc_signer_account 15oF4uVJwmo4TdGW7VfQxNLavjCXviqxT9S1MgbjMNHr6Sp5
+      assets_parachain_account:
+        sovereign_account: &system_sovereign 13YMK2edbuhwMBxeUWm9c643A2wyYHwSVh1bCM7tShtg7Dtk
+      penpal_parachain:
+        sovereign_account: &parachain_sovereign 13YMK2eYoAvStnzReuxBjMrAvPXmmdsURwZvc62PrdXimbNy
+  decodedCalls:
+    fund_system_parachain_with_deposit:
+      chain: *relay_chain
+      encode: false
+      pallet: balances
+      call: transfer
+      args: [
+        *system_sovereign,
+        *deposit,
+      ]
+    force_hrmp_channel_system_to_para:
+      chain: *relay_chain
+      encode: false
+      pallet: hrmp
+      call: forceOpenHrmpChannel
+      sudo: true
+      args: [
+        *system_id,
+        *para_id,
+        *max_capacity,
+        *max_message_size
+      ]
+    force_hrmp_channel_para_to_system:
+      chain: *relay_chain
+      encode: false
+      pallet: hrmp
+      call: forceOpenHrmpChannel
+      sudo: true
+      args: [
+        *para_id,
+        *system_id,
+        *max_capacity,
+        *max_message_size
+      ]
+    batch_all_opening_channel:
+      chain: *relay_chain
+      encode: false
+      pallet: utility
+      call: batchAll
+      args: [
+        [
+          $fund_system_parachain_with_deposit,
+          $force_hrmp_channel_system_to_para,
+          $force_hrmp_channel_para_to_system
+        ]
+      ]
+
+tests:
+  - name: Open HRMP channels System<>Para
+    before:
+      - name: DEPENDENCY | Parachain Sovereign account in the Relay Chain needs to be funded
+        actions:
+          - extrinsics:
+            - chain: *relay_chain
+              signer: *rc_signer
+              pallet: balances
+              call: transfer
+              args: [
+                *parachain_sovereign,
+                *deposit,
+              ]
+              events:
+                - name: balances.Transfer
+                  result: { from: *rc_signer_account, to: *parachain_sovereign, amount: *deposit }
+    describes:
+      - name: Batch HRMP opening channels
+        its:
+          - name: Open bidirectional channels between System Parachain and Parachains
+            actions:
+              - extrinsics:
+                - chain: *relay_chain
+                  signer: *rc_signer
+                  pallet: utility
+                  call: forceBatch
+                  args: [
+                    [
+                      $batch_all_opening_channel
+                      # $batch_all_opening_channel 2
+                    ]
+                  ]
+                  events:
+                    - name: balances.Transfer
+                      result: { from: *rc_signer_account, to: *system_sovereign, amount: *deposit }
+                    - name: hrmp.HrmpChannelForceOpened
+                    - name: hrmp.HrmpChannelForceOpened
